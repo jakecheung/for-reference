@@ -1,75 +1,121 @@
 #!/bin/bash
+rm modified_files.txt
+rm -rf dev_branch_folder
+rm -rf delta_branch
 
-# PR编号
-PR_NUMBER=687
+# GitHub 仓库信息
+GIT_REPO=
+OWNER=""
+REPO=""
+TOKEN="" # 替换为您的 GitHub 访问令牌
+PULL_NUMBER="3" # 替换为您的 Pull Request 编号
+PROJECT_NAME="shell-script-development"
 
-# 忽略删除的文件或目录列表
-IGNORE_DELETE_LIST=(
-    "path/to/ignore1"
-    "path/to/ignore2"
-    # 添加更多忽略的路径
-)
+# GitHub API URL
+API_URL="https://api.github.com/repos/$OWNER/$REPO/pulls/$PULL_NUMBER/files"
 
-# 检查git是否已经初始化
-if [ ! -d ".git" ]; then
-    echo "Error: This script must be run from within a git repository."
-    exit 1
+# 1. 获取PR的文件列表
+echo "Fetching changed files for PR #$PULL_NUMBER..."
+FILES=$(curl -s -X GET -H "Authorization: token $TOKEN" "$API_URL" | jq -r '.[] | .filename')
+
+# 检查是否有文件被修改
+if [ -z "$FILES" ]; then
+  echo "No files changed in PR #$PULL_NUMBER."
+  exit 0
 fi
 
-# 拉取最新的远程分支信息
-echo "Fetching latest remote branches..."
-git fetch --all
+# 保存文件列表到临时文件
+echo "$FILES" > modified_files.txt
 
-# 检查当前是否在dev分支
-if [ "$(git rev-parse --abbrev-ref HEAD)" != "dev" ]; then
-    echo "Error: You must be on the 'dev' branch to run this script."
-    exit 1
-fi
+# 2. 创建一个新的文件夹，用git初始化远端仓库
+NEW_FOLDER="dev_branch_folder"
+DELTA_FOLDER="delta_branch"
 
-# 基于远端dev分支创建新分支uat_auto
-echo "Creating a new branch 'uat_auto' based on remote 'dev' branch..."
-git checkout -b uat_auto origin/dev
+mkdir "$NEW_FOLDER"
+mkdir "$DELTA_FOLDER"
 
-# 检出PR编号对应的变更
-echo "Checking out changes from PR #$PR_NUMBER..."
-git fetch origin pull/$PR_NUMBER/head:pr_$PR_NUMBER
+cd "$NEW_FOLDER"
+git init
+#
+# 添加远端仓库URL
+#git remote add origin git@github.com:$OWNER/$NEW_FOLDER.git
+git clone git@github.com:jakecheung/shell-script-development.git
 
-# 获取PR变更的文件列表
-echo "Getting list of changed files from PR #$PR_NUMBER..."
-changed_files=$(git diff --name-only dev...pr_$PR_NUMBER)
+# 3. 切换到dev分支，然后基于dev分支创建一个feature/delta分支
+git fetch origin
+git checkout -b dev
+git checkout -b feature/delta
 
-# 删除未在PR中变更的文件，除了忽略列表中的文件
-echo "Deleting files that are not part of PR #$PR_NUMBER..."
-for file in $(find . -type f ! -path ".git/*"); do
-    if ! echo "$changed_files" | grep -q "$file"; then
-        # 检查文件是否在忽略列表中
-        IGNORE=0
-        for ignore_path in "${IGNORE_DELETE_LIST[@]}"; do
-            if [[ "$file" == "$ignore_path" || "$file" == "$ignore_path/"* ]]; then
-                IGNORE=1
-                break
-            fi
-        done
+# 4. 删除PR中有文件改动过以外的文件
+# 将文件列表保存到数组
+#cd "$NEW_FOLDER" #Testing
+cd $PROJECT_NAME
 
-        if [ $IGNORE -eq 0 ]; then
-            echo "Deleting: $file"
-            rm "$file"
-        else
-            echo "Skipping deletion of ignored file: $file"
-        fi
+# 读取文件列表
+while IFS= read -r file; do
+  fileArray+=("$file") # 将文件名添加到数组
+done < ../../"modified_files.txt"
+
+
+# 跳过删除的文件列表
+SKIP_FILES=("./res") # 替换为您想要跳过的文件或目录
+
+# 删除不在PR文件列表中的文件
+find . -type f | while read -r file; do
+  # 检查是否在跳过列表中
+  skip=0
+  for skip_file in "${SKIP_FILES[@]}"; do
+    if [[ "$file" == "./$skip_file" ]]; then
+      skip=1
+      break
     fi
+  done
+
+  # 如果不在跳过列表中，检查是否在PR文件列表中
+  if [ $skip -eq 0 ]; then
+    found=0
+    for item in "${fileArray[@]}"; do
+      if [[ "$file" == "./$item" ]]; then
+        echo "Keeping file:$file"
+        file_folder_path="${file%/*}"
+        target_folder_path=../../$DELTA_FOLDER/$file_folder_path
+
+        # 检查目标文件夹是否存在
+        if [ ! -d "$target_folder_path" ]; then
+            # 如果不存在，则创建目标文件夹
+            mkdir -p "$target_folder_path"
+        fi
+        cp  $file ../../$DELTA_FOLDER${file/./}
+        found=1
+        break
+      fi
+    done
+    if [ $found -eq 0 ]; then
+      x=1
+#      echo "Removing file: $file"
+#      rm "$file"
+    fi
+  fi
 done
 
-# 将PR变更的文件添加到暂存区
-echo "Staging changed files from PR #$PR_NUMBER..."
-git add $changed_files
+# 清理临时文件
+#rm modified_files.txt
 
-# 提交变更
-echo "Committing changes..."
-git commit -m "Merge PR #$PR_NUMBER into uat_auto, keeping only changed files"
+echo "Script completed. Files not in PR have been removed."
 
-# 推送新分支到远程仓库
-echo "Pushing 'uat_auto' branch to remote..."
-git push -u origin uat_auto
+echo "Current path:"
+PWD
 
-echo "PR #$PR_NUMBER has been processed. Only changed files are kept in the new branch 'uat_auto'."
+echo "try to push delta branch"
+cd ../../$DELTA_FOLDER
+git init
+git remote add origin git@github.com:jakecheung/shell-script-development.git
+git fetch origin
+git checkout -b dev
+git checkout -b feature/delta_$PULL_NUMBER
+git pull -f origin feature/delta_$PULL_NUMBER
+git add .
+git commit -m "Auto generate package for PR# $PULL_NUMBER"
+git git push origin feature/delta_$PULL_NUMBER
+
+echo "pushed"
