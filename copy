@@ -1,0 +1,51 @@
+properties([
+  parameters([
+    [
+      $class: 'ChoiceParameter',
+      choiceType: 'PT_SINGLE_SELECT',
+      name: 'type',
+      script: [
+        $class: 'GroovyScript',
+        script: [
+          classpath: [],
+          sandbox: false,
+          script: 'return ["UAT", "Release"]'
+        ]
+      ]
+    ],
+    [
+      $class: 'CascadeChoiceParameter',
+      choiceType: 'PT_TEXT_INPUT',
+      name: 'packagename',
+      referencedParameters: 'type',
+      script: [
+        $class: 'GroovyScript',
+        script: [
+          classpath: [],
+          sandbox: false,
+          script: '''
+            if (type.equals("Release")) {
+                return ["请输入包名"]
+            } else {
+                return [""]
+            }
+          '''
+        ]
+      ]
+    ]
+  ])
+])
+
+pipeline {
+  agent any
+  stages {
+    stage('Build') {
+      steps {
+        echo "选择的类型是: ${params.type}"
+        if (params.type == "Release") {
+          echo "输入的包名是: ${params.packagename}"
+        }
+      }
+    }
+  }
+}
